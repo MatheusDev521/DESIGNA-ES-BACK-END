@@ -150,6 +150,79 @@ def gerar_pdf():
         return jsonify({"erro": str(e)}), 500
 
 
+# ------------------------------------------------------------
+# IMPRIMIR TODOS: um único PDF com todas as datas salvas
+# ------------------------------------------------------------
+def preencher_designacao(d, semana, locais):
+    """Preenche uma página do designacao.pdf e devolve os bytes do PDF."""
+    input_path = os.path.join(BASE, "designacao.pdf")
+    reader = PdfReader(input_path)
+    writer = PdfWriter()
+    writer.append(reader)
+
+    campos = {
+        "900_1_Text_SanSerif": d.get("nome", ""),
+        "900_2_Text_SanSerif": d.get("ajudante", ""),
+        "900_3_Text_SanSerif": semana,
+        "900_4_Text_SanSerif": f"{d.get('numero', '')}. {d.get('parte', '')}".strip(". "),
+        "900_5_CheckBox": "/Yes" if "principal" in locais else "/Off",
+        "900_6_CheckBox": "/Yes" if "salaB"     in locais else "/Off",
+        "900_7_CheckBox": "/Yes" if "salaC"     in locais else "/Off",
+    }
+
+    writer.update_page_form_field_values(
+        writer.pages[0], campos, auto_regenerate=False
+    )
+
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+@app.route("/gerar-pdf-todos", methods=["POST"])
+def gerar_pdf_todos():
+    try:
+        dados  = request.get_json()
+        blocos = dados.get("blocos", [])
+
+        if not blocos:
+            return jsonify({"erro": "Nenhum bloco enviado"}), 400
+
+        merged_writer = PdfWriter()
+
+        # Ordena por data (formato AAAA-MM-DD ordena corretamente como texto)
+        for bloco in sorted(blocos, key=lambda b: b.get("semana", "")):
+            semana_raw = bloco.get("semana", "")
+            locais     = bloco.get("locais", [])
+
+            try:
+                semana = datetime.strptime(semana_raw, "%Y-%m-%d").strftime("%d/%m/%Y")
+            except ValueError:
+                semana = semana_raw
+
+            for d in bloco.get("designacoes", []):
+                pdf_bytes = preencher_designacao(d, semana, locais)
+                merged_writer.append(PdfReader(io.BytesIO(pdf_bytes)))
+
+        if len(merged_writer.pages) == 0:
+            return jsonify({"erro": "Nenhuma designação para gerar"}), 400
+
+        output = io.BytesIO()
+        merged_writer.write(output)
+        output.seek(0)
+
+        return send_file(
+            output,
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name="designacoes-todas.pdf"
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+
 if __name__ == "__main__":
     # Porta dinâmica: o Render injeta a variável de ambiente PORT.
     # Localmente, sem essa variável, cai no 5000 de sempre.
